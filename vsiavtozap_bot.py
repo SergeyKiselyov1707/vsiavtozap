@@ -1,83 +1,120 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler, filters,
+    ContextTypes, ConversationHandler
+)
+import aiosqlite
+from datetime import datetime
 
 TOKEN = "8080216198:AAEi07ywy8olOrbDdbxSwF-VOxQ4DCN1VCM"
-MANAGER_CHAT_ID = -5576243097
+MANAGER_CHAT_ID = -5576243097  # заміни на свій
+ASK_CAR, ASK_PARTS = range(2)
 
-ASK_PARTS = 1
+# Включаємо логування
+logging.basicConfig(level=logging.INFO)
 
+# Створення таблиці SQLite
+async def init_db():
+    async with aiosqlite.connect("requests.db") as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT,
+                car_info TEXT,
+                parts_needed TEXT,
+                timestamp TEXT
+            )
+        """)
+        await db.commit()
+
+# Старт: запитуємо інфо про авто
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Привіт! Надішли мені дані про авто (Марка, модель, рік випуску, об'єм двигуна або фото VIN-коду)."
+        "Вітаю! Надішліть, будь ласка, дані про авто (марка, модель, рік, об’єм або фото VIN-коду)."
     )
+    return ASK_CAR
+
+# Отримуємо дані про авто
+async def receive_car(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['car_info'] = update.message.text or "(фото)"
+    await update.message.reply_text("Які саме запчастини вас цікавлять?")
     return ASK_PARTS
 
-async def ask_parts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Отримуємо перелік запчастин і надсилаємо менеджеру
+async def receive_parts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
-    text = update.message.text or ""
-    photo = update.message.photo
+    car_info = context.user_data.get('car_info')
+    parts = update.message.text
 
-    # Зберігаємо дані авто у контексті користувача
-    if photo:
-        file_id = photo[-1].file_id
-        context.user_data['auto_photo_id'] = file_id
-        context.user_data['auto_text'] = None
-    else:
-        context.user_data['auto_text'] = text
-        context.user_data['auto_photo_id'] = None
+    # Збереження в БД
+    async with aiosqlite.connect("requests.db") as db:
+        await db.execute("""
+            INSERT INTO requests (user_id, username, car_info, parts_needed, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            user.id,
+            user.username,
+            car_info,
+            parts,
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        ))
+        await db.commit()
 
-    # Питаємо, які запчастини потрібні
-    await update.message.reply_text("Які саме запчастини вас цікавлять? Напишіть, будь ласка.")
+    # Надсилаємо менеджеру
+    caption = (
+        f"🔔 Новий запит від @{user.username or user.first_name} ({user.id}):\n\n"
+        f"🚗 Авто: {car_info}\n"
+        f"🧩 Запчастини: {parts}"
+    )
+    await context.bot.send_message(chat_id=MANAGER_CHAT_ID, text=caption)
 
-    return ConversationHandler.END
+    # Кнопка для зв’язку з менеджером
+    keyboard = [
+        [InlineKeyboardButton("📞 Зв'язатися з менеджером", url="https://t.me/Vsiavtozap")]  # Замінити
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-async def handle_parts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    parts_text = update.message.text or "(немає тексту)"
-
-    # Формуємо повідомлення для менеджера
-    auto_text = context.user_data.get('auto_text')
-    auto_photo_id = context.user_data.get('auto_photo_id')
-
-    caption = f"Запит від @{user.username or user.first_name} ({user.id}):\n"
-    if auto_text:
-        caption += f"Інформація про авто:\n{auto_text}\n"
-    if auto_photo_id:
-        caption += "Фото VIN-коду надано.\n"
-    caption += f"Потрібні запчастини:\n{parts_text}"
-
-    # Відправляємо менеджеру
-    if auto_photo_id:
-        await context.bot.send_photo(chat_id=MANAGER_CHAT_ID, photo=auto_photo_id, caption=caption)
-    else:
-        await context.bot.send_message(chat_id=MANAGER_CHAT_ID, text=caption)
-
-    # Відповідаємо користувачу
-    await update.message.reply_text("✅ Ваш запит надіслано менеджеру. Очікуйте відповідь.")
-
-    # Очищаємо дані користувача
+    await update.message.reply_text("✅ Запит прийнято! Менеджер скоро зв’яжеться з вами.", reply_markup=reply_markup)
     context.user_data.clear()
-
     return ConversationHandler.END
 
+# Скасування
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Скасовано. Якщо потрібно почати заново, надішліть /start.")
+    await update.message.reply_text("Запит скасовано.")
     context.user_data.clear()
     return ConversationHandler.END
 
-if __name__ == "__main__":
+# Повторний обробник усіх текстів → автоматично як новий запит
+async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await start(update, context)
+    return ASK_CAR
+
+# Основна функція запуску
+async def main():
+    await init_db()
+
+    app = ApplicationBuilder().token(TOKEN).build()
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            ASK_PARTS: [MessageHandler(filters.TEXT | filters.PHOTO, ask_parts)],
+            ASK_CAR: [MessageHandler(filters.TEXT | filters.PHOTO, receive_car)],
+            ASK_PARTS: [MessageHandler(filters.TEXT, receive_parts)],
         },
-        fallbacks=[MessageHandler(filters.COMMAND, cancel)],
+        fallbacks=[CommandHandler("cancel", cancel)],
+        allow_reentry=True,
         per_user=True,
     )
 
-    app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(conv_handler)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_parts))  # Для обробки повідомлення із запчастинами
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_handler))
 
-    print("Бот запущено...")
-    app.run_polling()
+    print("Бот запущено ✅")
+    await app.run_polling()
+
+# Запуск
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
