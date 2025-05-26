@@ -2,7 +2,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # Замініть цей токен на свій
-TOKEN = "VsiAvtoZAP_bot"
+TOKEN = "8080216198:AAEi07ywy8olOrbDdbxSwF-VOxQ4DCN1VCM"
 
 # ID вашого менеджерського чату або групи
 MANAGER_CHAT_ID = -5576243097
