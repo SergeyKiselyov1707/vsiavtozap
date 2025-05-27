@@ -1,0 +1,15 @@
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+
+TOKEN = "8080216198:AAEi07ywy8olOrbDdbxSwF-VOxQ4DCN1VCM"
+
+async def print_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    print(f"✅ Chat ID: {chat.id}")
+    await update.message.reply_text(f"Ваш Chat ID: {chat.id}")
+
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(MessageHandler(filters.ALL, print_chat_id))
+
+print("Бот запущено. Напиши йому або в групу.")
+app.run_polling()
